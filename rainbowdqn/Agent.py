@@ -138,6 +138,7 @@ class Agent:
                 current_states_numpy = numpy.array(feeding_states)
                 current_states_torch = torch.from_numpy(current_states_numpy)
                 current_states_torch = current_states_torch.unsqueeze(0).to(self.device)
+
                 action = self.action(current_states_torch)
                 next_state, reward, truncated, terminated, _ = self.environment.step(
                     action
@@ -183,7 +184,9 @@ class Agent:
     def action(self, state: torch.Tensor):
         if self.t < self.training_starts:
             return self.environment.action_space.sample()
+
         logits = self.network(state)
+        # Softmax required here because network returns logits
         q_dist = torch.softmax(logits, dim=2)
         q_values = torch.sum(q_dist * self.network.support, dim=2)
         return q_values.argmax(dim=1).item()
@@ -205,6 +208,10 @@ class Agent:
             states, actions, rewards, next_states, terminations, weights, indices
         )
         loss.backward()
+
+        # FIX 1: Gradient Clipping to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), 10.0)
+
         self.optimizer.step()
         self.update()
         return loss.item()
@@ -221,6 +228,8 @@ class Agent:
         actions = actions.long()
 
         current_log_probs = log_probs.gather(1, actions).squeeze(1)
+
+        # Loss Calculation
         loss_per_sample = -(target_pmfs * current_log_probs).sum(dim=1)
 
         new_priorities = loss_per_sample.detach().cpu().numpy() + 1e-6
@@ -243,15 +252,18 @@ class Agent:
 
         batch_size = next_states.size(0)
 
+        # Online selection
         online_logits = self.network(next_states)
         online_probs = torch.softmax(online_logits, dim=2)
         next_q_online = (online_probs * self.network.support).sum(dim=2)
         best_actions = next_q_online.argmax(dim=1)
 
+        # Target evaluation
         target_logits = self.target(next_states)
         target_probs = torch.softmax(target_logits, dim=2)
         next_dist = target_probs[range(batch_size), best_actions]
 
+        # Projection
         projected_atoms = (
             rewards
             + (self.gamma**self.steps)
@@ -260,6 +272,9 @@ class Agent:
         )
         projected_atoms = projected_atoms.clamp(self.vmin, self.vmax)
         b = (projected_atoms - self.vmin) / self.delta_z
+
+        # FIX 2: Explicit Clamp to prevent floating point errors (e.g. -0.00001)
+        b = b.clamp(0, self.num_atoms - 1)
 
         lower_idx = b.floor().long().clamp(0, self.num_atoms - 1)
         upper_idx = lower_idx + 1
