@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rainbowrl"
+name = "rainbowdqn"
 version = "0.0.12"
 authors = [
   { name="Taha Shieenavaz", email="tahashieenavaz@gmail.com" },
@@ -22,11 +22,11 @@ classifiers = [
 dependencies = ["numpy", "torch", "rltrees", "atarihns", "atarihelpers"]
 keywords = ["deep reinforcement learning", "drl", "rainbow", "dqn"]
 license = { file = "LICENSE" }
-urls = { Homepage="https://github.com/tahashieenavaz/rainbowrl", Repository="https://github.com/tahashieenavaz/rainbowrl", Documentation="https://github.com/tahashieenavaz/rainbowrl#readme" }
+urls = { Homepage="https://github.com/tahashieenavaz/rainbowdqn", Repository="https://github.com/tahashieenavaz/rainbowdqn", Documentation="https://github.com/tahashieenavaz/rainbowdqn#readme" }
 
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-rainbowrl = ["*.md", "*.txt"]
+rainbowdqn = ["*.md", "*.txt"]
