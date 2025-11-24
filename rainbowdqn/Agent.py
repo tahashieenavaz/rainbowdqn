@@ -237,7 +237,9 @@ class Agent:
 
     @torch.no_grad()
     def get_pmfs_target(self, next_states, rewards, terminations):
-        terminations = terminations.float()
+        rewards = rewards.view(-1, 1)
+        terminations = terminations.view(-1, 1).float()
+
         termination_mask = 1 - terminations
         batch_size = next_states.size(0)
         next_q_online = (self.network(next_states) * self.network.support).sum(dim=2)
