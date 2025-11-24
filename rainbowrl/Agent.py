@@ -93,7 +93,7 @@ class Agent:
             done = False
             episode_reward = 0.0
             episode_loss = 0.0
-            state, _ = self.env.reset()
+            state, _ = self.environment.reset()
 
             while not done:
                 _episode += 1
