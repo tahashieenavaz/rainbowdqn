@@ -19,8 +19,11 @@ class RainbowNetwork(torch.nn.Module):
 
         self.phi = torch.nn.Sequential(
             torch.nn.Conv2d(4, 32, kernel_size=8, stride=4),
+            torch.nn.GELU(),
             torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            torch.nn.GELU(),
             torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            torch.nn.GELU(),
             torch.nn.Flatten(),
         )
         self.value = torch.nn.Sequential(
@@ -48,5 +51,4 @@ class RainbowNetwork(torch.nn.Module):
         advantage = self.advantage(features).view(
             -1, self.action_dimension, self.num_atoms
         )
-        q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
-        return torch.softmax(q_values, dim=2)
+        return value + advantage - advantage.mean(dim=1, keepdim=True)

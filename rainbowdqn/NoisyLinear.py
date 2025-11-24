@@ -9,38 +9,43 @@ class NoisyLinear(torch.nn.Module):
         self.out_features = out_features
         self.std_init = std_init
 
-        self.weight_mu = torch.nn.Parameter(
-            torch.FloatTensor(out_features, in_features)
-        )
-        self.weight_sigma = torch.nn.Parameter(
-            torch.FloatTensor(out_features, in_features)
-        )
-        self.register_buffer(
-            "weight_epsilon", torch.FloatTensor(out_features, in_features)
-        )
-        self.bias_mu = torch.nn.Parameter(torch.FloatTensor(out_features))
-        self.bias_sigma = torch.nn.Parameter(torch.FloatTensor(out_features))
-        self.register_buffer("bias_epsilon", torch.FloatTensor(out_features))
-        # factorized gaussian noise
+        self.weight_mu = torch.nn.Parameter(torch.empty(out_features, in_features))
+        self.weight_sigma = torch.nn.Parameter(torch.empty(out_features, in_features))
+        self.register_buffer("weight_epsilon", torch.empty(out_features, in_features))
+
+        self.bias_mu = torch.nn.Parameter(torch.empty(out_features))
+        self.bias_sigma = torch.nn.Parameter(torch.empty(out_features))
+        self.register_buffer("bias_epsilon", torch.empty(out_features))
+
         self.reset_parameters()
         self.reset_noise()
 
     def reset_parameters(self):
         mu_range = 1 / math.sqrt(self.in_features)
+
         self.weight_mu.data.uniform_(-mu_range, mu_range)
-        self.weight_sigma.data.fill_(self.std_init / math.sqrt(self.in_features))
         self.bias_mu.data.uniform_(-mu_range, mu_range)
-        self.bias_sigma.data.fill_(self.std_init / math.sqrt(self.out_features))
+
+        self.weight_sigma.data.fill_(self.std_init / math.sqrt(self.in_features))
+        self.bias_sigma.data.fill_(self.std_init / math.sqrt(self.in_features))
+
+    def _scale_noise(self, size):
+        x = torch.randn(size, device=self.weight_mu.device)
+        return x.sign().mul_(x.abs().sqrt_())
 
     def reset_noise(self):
-        self.weight_epsilon.normal_()
-        self.bias_epsilon.normal_()
+        epsilon_in = self._scale_noise(self.in_features)
+        epsilon_out = self._scale_noise(self.out_features)
+
+        self.weight_epsilon.copy_(epsilon_out.ger(epsilon_in))
+        self.bias_epsilon.copy_(epsilon_out)
 
     def forward(self, input):
         if self.training:
-            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
-            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
+            return torch.nn.functional.linear(
+                input,
+                self.weight_mu + self.weight_sigma * self.weight_epsilon,
+                self.bias_mu + self.bias_sigma * self.bias_epsilon,
+            )
         else:
-            weight = self.weight_mu
-            bias = self.bias_mu
-        return torch.nn.functional.linear(input, weight, bias)
+            return torch.nn.functional.linear(input, self.weight_mu, self.bias_mu)
