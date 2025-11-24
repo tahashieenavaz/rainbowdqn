@@ -9,10 +9,13 @@ class RainbowNetwork(torch.nn.Module):
         action_dimension: int,
         num_atoms: int,
         activation_fn: torch.nn.Module,
+        vmin: float,
+        vmax: float,
     ):
         super().__init__()
         self.num_atoms = num_atoms
         self.action_dimension = action_dimension
+        self.register_buffer("support", torch.linspace(vmin, vmax, num_atoms))
 
         self.phi = torch.nn.Sequential(
             torch.nn.Conv2d(4, 32, kernel_size=8, stride=4),

@@ -70,7 +70,7 @@ class PrioritizedReplayBuffer:
         last_nstep = self.nstep[-1]
         return reward, last_nstep[3], last_nstep[4]
 
-    def sample(self, batch_size):
+    def sample(self, batch_size: int, beta: float):
         total = self.sum_tree.total()
         segment = total / batch_size
 
@@ -84,21 +84,21 @@ class PrioritizedReplayBuffer:
         )
 
         probs = priorities / total
-        weights = (self.size * probs) ** -self.beta
+        weights = (self.size * probs) ** -beta
         weights /= weights.max()
 
         def t(x):
             return torch.from_numpy(x[indices]).to(self.device)
 
-        return {
-            "states": t(self.buffer_obs),
-            "actions": t(self.buffer_actions).unsqueeze(1),
-            "rewards": t(self.buffer_rewards).unsqueeze(1),
-            "next_states": t(self.buffer_next_obs),
-            "terminations": t(self.buffer_dones).unsqueeze(1),
-            "weights": torch.from_numpy(weights).to(self.device).unsqueeze(1),
-            "indices": indices,
-        }
+        return (
+            t(self.states),
+            t(self.actions).unsqueeze(1),
+            t(self.rewards).unsqueeze(1),
+            t(self.next_states),
+            t(self.terminations).unsqueeze(1),
+            torch.from_numpy(weights).to(self.device).unsqueeze(1),
+            indices,
+        )
 
     def update_priorities(self, indices, priorities):
         priorities = (numpy.abs(priorities) + self.eps) ** self.alpha
