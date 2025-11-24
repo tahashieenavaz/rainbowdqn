@@ -33,7 +33,6 @@ class Agent:
         max_priority: float = 1.0,
         epsilon: float = 1e-6,
         gamma: float = 0.99,
-        tau: float = 0.005,
         adam_epsilon: float = 1.5e-4,
         adam_betas: tuple = (0.9, 0.999),
         weight_decay: float = 0.0,
@@ -53,7 +52,6 @@ class Agent:
         self.timesteps = timesteps
         self.steps = steps
         self.alpha = alpha
-        self.tau = tau
         self.gamma = gamma
         self.vmin = vmin
         self.vmax = vmax
@@ -177,7 +175,7 @@ class Agent:
                 )
 
         return SimpleNamespace(
-            **{"loss": total_loss, "hns": total_hns, "reward": total_rewards}
+            **{"loss": total_loss, "hns": total_hns, "rewards": total_rewards}
         )
 
     @torch.no_grad()
@@ -185,8 +183,10 @@ class Agent:
         if self.t < self.training_starts:
             return self.environment.action_space.sample()
 
+        # to add noise and explore
+        self.network.reset_noise()
+
         logits = self.network(state)
-        # Softmax required here because network returns logits
         q_dist = torch.softmax(logits, dim=2)
         q_values = torch.sum(q_dist * self.network.support, dim=2)
         return q_values.argmax(dim=1).item()
@@ -199,6 +199,7 @@ class Agent:
             return 0.0
 
         self.reset_noise()
+
         sample_result = self.buffer.sample(self.batch_size, self.beta)
         states, actions, rewards, next_states, terminations, weights, indices = (
             sample_result
