@@ -42,28 +42,25 @@ class PrioritizedReplayBuffer:
 
     def add(self, state, next_state, action, reward, termination):
         self.nstep.append((state, action, reward, next_state, termination))
+        if len(self.nstep) == self.steps:
+            self._store_transition()
+        if termination:
+            while len(self.nstep) > 0:
+                self._store_transition()
 
-        if len(self.nstep) < self.steps:
-            return
-
+    def _store_transition(self):
         reward, next_state, termination = self.nstep_info()
-        state = self.nstep[0][0]
-        action = self.nstep[0][1]
-
+        state, action, _, _, _ = self.nstep[0]
         self.states[self.ptr] = state
         self.actions[self.ptr] = action
         self.rewards[self.ptr] = reward
         self.next_states[self.ptr] = next_state
         self.terminations[self.ptr] = termination
-
         priority = self.max_priority**self.alpha
         self.tree.update(self.ptr, priority)
-
         self.ptr = (self.ptr + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
-
-        if termination:
-            self.nstep.clear()
+        self.nstep.popleft()
 
     def nstep_info(self):
         discount = 1.0
@@ -98,7 +95,7 @@ class PrioritizedReplayBuffer:
 
         return (
             t(self.states),
-            t(self.actions).unsqueeze(1),
+            t(self.actions),
             t(self.rewards).unsqueeze(1),
             t(self.next_states),
             t(self.terminations).unsqueeze(1),
