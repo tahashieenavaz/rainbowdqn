@@ -15,7 +15,7 @@ class Agent:
     def __init__(
         self,
         environment: str,
-        lr: float = 0.0001,
+        lr: float = 0.00025 / 4,
         training_starts: int = 80_000,
         training_frequency: int = 4,
         embedding_dimension: int = 256,
