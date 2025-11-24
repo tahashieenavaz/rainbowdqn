@@ -1,9 +1,41 @@
 import torch
+from .NoisyLinear import NoisyLinear
 
 
 class RainbowNetwork(torch.nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        embedding_dimension: int,
+        action_dimension: int,
+        num_atoms: int,
+        activation_fn: torch.nn.Module,
+    ):
         super().__init__()
+        self.num_atoms = num_atoms
+        self.action_dimension = action_dimension
+
+        self.phi = torch.nn.Sequential(
+            torch.nn.Conv2d(4, 32, kernel_size=8, stride=4),
+            torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            torch.nn.Conv2d(64, 64, kernel_size=2, stride=1),
+            torch.nn.Flatten(),
+        )
+        self.value = torch.nn.Sequential(
+            NoisyLinear(3136, embedding_dimension),
+            activation_fn(),
+            NoisyLinear(embedding_dimension, num_atoms),
+        )
+        self.advantage = torch.nn.Sequential(
+            NoisyLinear(3136, embedding_dimension),
+            activation_fn(),
+            NoisyLinear(embedding_dimension, num_atoms * action_dimension),
+        )
 
     def forward(self, state):
-        pass
+        features = self.phi(state)
+        value = self.value(features).view(-1, 1, self.num_atoms)
+        advantage = self.advantage(features).view(
+            -1, self.action_dimension, self.num_atoms
+        )
+        q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
+        return torch.softmax(q_values, dim=2)
