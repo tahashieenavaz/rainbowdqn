@@ -17,12 +17,19 @@ class Agent:
         num_atoms: int = 51,
         vmin: float = -10.0,
         vmax: float = 10.0,
+        initial_beta: float = 0.4,
+        total_timesteps: int = 10_000_000,
+        buffer_size: int = 1_000_00,
+        alpha: float = 0.5,
     ):
         self.environment = environment
+        self.alpha = alpha
         self.training_starts = training_starts
         self.training_frequency = training_frequency
         self.action_dimension = self.environment.action_space.n
         self.delta_z = (vmax - vmin) / (num_atoms - 1)
+        self.initial_beta = initial_beta
+        self.total_timesteps = total_timesteps
 
         self.network = RainbowNetwork(
             embedding_dimension, activation_fn, num_atoms, self.action_dimension
@@ -38,9 +45,6 @@ class Agent:
     @torch.no_grad()
     def action(self, state: torch.Tensor):
         pass
-
-    def tick(self):
-        self.t += 1
 
     def train(self) -> LossValue:
         if self.t < self.training_starts:
@@ -58,3 +62,12 @@ class Agent:
 
     def loss(self):
         pass
+
+    def tick(self):
+        self.t += 1
+
+    def beta(self) -> float:
+        initial_beta = self.initial_beta
+        return min(
+            1.0, initial_beta + self.t * (1.0 - initial_beta) / self.total_timesteps
+        )
