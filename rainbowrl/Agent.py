@@ -155,7 +155,8 @@ class Agent:
 
             if verbose:
                 print(
-                    f"episode: {_episode}, t: {self.t}, loss: {episode_loss}, hns: {hns}, reward: {episode_reward}"
+                    f"episode: {_episode}, t: {self.t}, loss: {episode_loss}, hns: {hns}, reward: {episode_reward}",
+                    flush=True,
                 )
 
         return SimpleNamespace(
