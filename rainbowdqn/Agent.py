@@ -237,13 +237,18 @@ class Agent:
 
     @torch.no_grad()
     def get_pmfs_target(self, next_states, rewards, terminations):
+        terminations = terminations.float()
+        termination_mask = 1 - terminations
         batch_size = next_states.size(0)
         next_q_online = (self.network(next_states) * self.network.support).sum(dim=2)
         best_actions = next_q_online.argmax(dim=1)
         next_dist = self.target(next_states)[range(batch_size), best_actions]
-        projected_atoms = rewards.view(-1, 1) + (
-            self.gamma**self.steps
-        ) * self.network.support.view(1, -1) * (~terminations.view(-1, 1))
+        projected_atoms = (
+            rewards.view(-1, 1)
+            + (self.gamma**self.steps)
+            * self.network.support.view(1, -1)
+            * termination_mask
+        )
         projected_atoms = projected_atoms.clamp(self.vmin, self.vmax)
         b = (projected_atoms - self.vmin) / self.delta_z
         lower_idx = b.floor().long().clamp(0, self.num_atoms - 1)
