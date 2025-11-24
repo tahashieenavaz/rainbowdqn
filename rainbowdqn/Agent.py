@@ -183,8 +183,8 @@ class Agent:
     def action(self, state: torch.Tensor):
         if self.t < self.training_starts:
             return self.environment.action_space.sample()
-
-        q_dist = self.network(state)
+        logits = self.network(state)
+        q_dist = torch.softmax(logits, dim=2)
         q_values = torch.sum(q_dist * self.network.support, dim=2)
         return q_values.argmax(dim=1).item()
 
@@ -242,9 +242,15 @@ class Agent:
         termination_mask = 1 - terminations
 
         batch_size = next_states.size(0)
-        next_q_online = (self.network(next_states) * self.network.support).sum(dim=2)
+
+        online_logits = self.network(next_states)
+        online_probs = torch.softmax(online_logits, dim=2)
+        next_q_online = (online_probs * self.network.support).sum(dim=2)
         best_actions = next_q_online.argmax(dim=1)
-        next_dist = self.target(next_states)[range(batch_size), best_actions]
+
+        target_logits = self.target(next_states)
+        target_probs = torch.softmax(target_logits, dim=2)
+        next_dist = target_probs[range(batch_size), best_actions]
 
         projected_atoms = (
             rewards
