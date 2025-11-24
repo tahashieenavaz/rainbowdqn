@@ -1,8 +1,10 @@
 import torch
+import numpy
 from typing import NewType
 from types import SimpleNamespace
 from atarihns import calculate_hns
 from atarihelpers import process_state, make_environment
+from collections import deque
 from .RainbowNetwork import RainbowNetwork
 from .PrioritizedReplayBuffer import PrioritizedReplayBuffer
 
@@ -51,6 +53,13 @@ class Agent:
         self.batch_size = batch_size
         self.image_size = image_size
 
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+
         self.network = RainbowNetwork(
             embedding_dimension=embedding_dimension,
             activation_fn=activation_fn,
@@ -58,7 +67,7 @@ class Agent:
             action_dimension=self.action_dimension,
             vmax=vmax,
             vmin=vmin,
-        )
+        ).to(self.device)
         self.target = RainbowNetwork(
             embedding_dimension=embedding_dimension,
             activation_fn=activation_fn,
@@ -66,70 +75,98 @@ class Agent:
             action_dimension=self.action_dimension,
             vmax=vmax,
             vmin=vmin,
-        )
+        ).to(self.device)
         self.target.load_state_dict(self.network.state_dict())
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr)
         self.buffer = PrioritizedReplayBuffer(
-            buffer_size, image_size, steps, max_priority, alpha, epsilon
+            capacity=buffer_size,
+            image_size=image_size,
+            steps=steps,
+            max_priority=max_priority,
+            alpha=alpha,
+            epsilon=epsilon,
+            gamma=gamma,
+            device=self.device,
         )
-
         self.t = 0
 
     @property
     def beta(self) -> float:
         initial_beta = self.initial_beta
-        return min(
-            1.0, initial_beta + self.t * (1.0 - initial_beta) / self.total_timesteps
-        )
+        return min(1.0, initial_beta + self.t * (1.0 - initial_beta) / self.timesteps)
 
     def loop(self, verbose: bool = True):
+        _episode = 0
         total_loss = []
         total_hns = []
         total_rewards = []
-
-        _episode = 0
+        feeding_states = deque(maxlen=4)
 
         while self.t < self.timesteps:
+            _episode += 1
             done = False
             episode_reward = 0.0
             episode_loss = 0.0
             state, _ = self.environment.reset()
+            state = process_state(state, self.image_size)
 
             while not done:
-                _episode += 1
+                if len(feeding_states) == 0:
+                    for _ in range(4):
+                        feeding_states.append(state)
 
-                state = process_state(state, self.image_size)
-                action = self.action(state)
+                current_states_numpy = numpy.array(feeding_states)
+                current_states_torch = torch.from_numpy(current_states_numpy)
+                current_states_torch = current_states_torch.unsqueeze(0).to(self.device)
+
+                action = self.action(current_states_torch)
                 next_state, reward, truncated, terminated, _ = self.environment.step(
                     action
                 )
+
+                episode_reward += reward
+                next_state = process_state(next_state, self.image_size)
+
+                temporal_next_states = feeding_states.copy()
+                temporal_next_states.append(next_state)
+                temporal_next_states_numpy = numpy.array(temporal_next_states)
+
                 done = truncated or terminated
-                self.buffer.add(state, next_state, action, reward, done)
+                self.buffer.add(
+                    current_states_numpy,
+                    temporal_next_states_numpy,
+                    action,
+                    reward,
+                    done,
+                )
 
                 loss = self.train()
-                episode_loss += loss.item()
+                episode_loss += loss
 
                 self.tick()
+                state = next_state
 
-            if verbose:
-                print(
-                    f"episode: {_episode}, t: {self.t}, loss: {episode_loss}, hns: {hns}, reward: {episode_reward}"
-                )
+            feeding_states.clear()
 
             hns = calculate_hns(self.environment_identifier, episode_reward)
             total_hns.append(hns)
             total_rewards.append(episode_reward)
             total_loss.append(episode_loss)
 
-            return SimpleNamespace(
-                **{"loss": total_loss, "hns": total_hns, "reward": total_rewards}
-            )
+            if verbose:
+                print(
+                    f"episode: {_episode}, t: {self.t}, loss: {episode_loss}, hns: {hns}, reward: {episode_reward}"
+                )
+
+        return SimpleNamespace(
+            **{"loss": total_loss, "hns": total_hns, "reward": total_rewards}
+        )
 
     @torch.no_grad()
     def action(self, state: torch.Tensor):
         q_dist = self.network(state)
-        q_values = torch.sum(q_dist * self.support, dim=2)
-        return torch.argmax(q_values, dim=1).cpu().numpy()
+        q_values = torch.sum(q_dist * self.network.support, dim=2)
+        return torch.argmax(q_values, dim=1).cpu().numpy()[0]
 
     def train(self) -> LossValue:
         if self.t < self.training_starts:
@@ -143,7 +180,6 @@ class Agent:
         states, actions, rewards, next_states, terminations, indices, weights = (
             self.buffer.sample(self.batch_size, self.beta)
         )
-
         self.optimizer.zero_grad()
         loss = self.loss(
             states, actions, rewards, next_states, terminations, indices, weights
@@ -158,9 +194,10 @@ class Agent:
     def loss(
         self, states, actions, rewards, next_states, terminations, weights, indices
     ):
+        actions = actions.view(-1, 1, 1).long()
         distribution = self.network(states)
         predicted_distribution = distribution.gather(
-            1, actions.unsqueeze(-1).expand(-1, -1, self.num_atoms)
+            1, actions.expand(-1, -1, self.num_atoms)
         ).squeeze(1)
         log_pred = torch.log(predicted_distribution.clamp(min=1e-5, max=1 - 1e-5))
         target_pmfs = self.get_pmfs_target(next_states, rewards, terminations)
@@ -178,30 +215,36 @@ class Agent:
 
     @torch.no_grad()
     def get_pmfs_target(self, next_states, rewards, terminations):
-        next_dist = self.target(next_states)
-        support = self.target.support
+        batch_size = next_states.size(0)
 
-        next_dist_online = self.network(next_states)
-        next_q_online = torch.sum(next_dist_online * support, dim=2)
-        best_actions = torch.argmax(next_q_online, dim=1)
-        next_pmfs = next_dist[torch.arange(self.batch_size), best_actions]
+        # 1. Double DQN: Select best action using Online Net, get distribution from Target Net
+        next_q_online = (self.network(next_states) * self.network.support).sum(dim=2)
+        best_actions = next_q_online.argmax(dim=1)
 
-        gamma_n = self.gamma**self.steps
-        next_atoms = rewards + gamma_n * support * (1 - terminations.float())
-        tz = next_atoms.clamp(self.vmin, self.vmax)
+        # Select the distribution corresponding to the best action
+        # Shape: (batch_size, num_atoms)
+        next_dist = self.target(next_states)[range(batch_size), best_actions]
 
-        delta_z = self.delta_z
-        b = (tz - self.vmin) / delta_z
-        l = b.floor().clamp(0, self.num_atoms - 1)
-        u = b.ceil().clamp(0, self.num_atoms - 1)
-        d_m_l = (u.float() + (l == b).float() - b) * next_pmfs
-        d_m_u = (b - l) * next_pmfs
+        # 2. Calculate the projected support (Bellman update)
+        # T_z = r + gamma * z
+        # We reshape rewards/terminations to (B, 1) to broadcast correctly against support (N,)
+        projected_atoms = rewards.view(-1, 1) + (
+            self.gamma**self.steps
+        ) * self.network.support.view(1, -1) * (~terminations.view(-1, 1))
+        projected_atoms = projected_atoms.clamp(self.vmin, self.vmax)
 
-        target_pmfs = torch.zeros_like(next_pmfs)
-        for i in range(target_pmfs.size(0)):
-            target_pmfs[i].index_add_(0, l[i].long(), d_m_l[i])
-            target_pmfs[i].index_add_(0, u[i].long(), d_m_u[i])
+        # 3. Project onto the fixed support grid (The complex math part)
+        # Map range [vmin, vmax] to indices [0, num_atoms - 1]
+        b = (projected_atoms - self.vmin) / self.delta_z
+        lower_idx = b.floor().long().clamp(0, self.num_atoms - 1)
+        upper_idx = b.ceil().long().clamp(0, self.num_atoms - 1)
 
+        # Distribute probability mass to the neighbors
+        # (upper - b) goes to lower neighbor, (b - lower) goes to upper neighbor
+
+        target_pmfs = torch.zeros_like(next_dist)
+        target_pmfs.scatter_add_(1, lower_idx, next_dist * (upper_idx.float() - b))
+        target_pmfs.scatter_add_(1, upper_idx, next_dist * (b - lower_idx.float()))
         return target_pmfs
 
     def update(self):

@@ -13,18 +13,24 @@ class PrioritizedReplayBuffer:
         max_priority: float,
         alpha: float,
         epsilon: float,
+        gamma: float,
+        device: torch.device,
     ):
         self.capacity = capacity
         self.steps = steps
         self.max_priority = max_priority
         self.alpha = alpha
         self.epsilon = epsilon
+        self.gamma = gamma
+        self.device = device
 
-        self.states = numpy.zeros((capacity, image_size, image_size), dtype=numpy.uint8)
+        self.states = numpy.zeros(
+            (capacity, 4, image_size, image_size), dtype=numpy.uint8
+        )
         self.actions = numpy.zeros((capacity, 1), dtype=numpy.int64)
         self.rewards = numpy.zeros((capacity, 1), dtype=numpy.float32)
         self.next_states = numpy.zeros(
-            (capacity, image_size, image_size), dtype=numpy.uint8
+            (capacity, 4, image_size, image_size), dtype=numpy.uint8
         )
         self.terminations = numpy.zeros((capacity, 1), dtype=numpy.bool_)
         self.tree = SumTree(capacity)
@@ -71,16 +77,16 @@ class PrioritizedReplayBuffer:
         return reward, last_nstep[3], last_nstep[4]
 
     def sample(self, batch_size: int, beta: float):
-        total = self.sum_tree.total()
+        total = self.tree.total()
         segment = total / batch_size
 
         indices = [
-            self.sum_tree.retrieve(numpy.random.uniform(segment * i, segment * (i + 1)))
+            self.tree.retrieve(numpy.random.uniform(segment * i, segment * (i + 1)))
             for i in range(batch_size)
         ]
 
         priorities = numpy.array(
-            [self.sum_tree.tree[idx + self.capacity - 1] for idx in indices]
+            [self.tree.tree[idx + self.capacity - 1] for idx in indices]
         )
 
         probs = priorities / total
@@ -101,7 +107,7 @@ class PrioritizedReplayBuffer:
         )
 
     def update_priorities(self, indices, priorities):
-        priorities = (numpy.abs(priorities) + self.eps) ** self.alpha
+        priorities = (numpy.abs(priorities) + self.epsilon) ** self.alpha
         self.max_priority = max(self.max_priority, priorities.max())
         for idx, p in zip(indices, priorities):
             self.tree.update(idx, p)
