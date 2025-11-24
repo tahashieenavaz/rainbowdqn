@@ -1,4 +1,4 @@
-from rainbowrl import Agent
+from rainbowdqn import Agent
 
 agent = Agent(environment="ALE/Pong-v5")
 data = agent.loop(verbose=True)

@@ -212,15 +212,15 @@ class Agent:
     def loss(
         self, states, actions, rewards, next_states, terminations, weights, indices
     ):
-        actions = actions.view(-1, 1, 1).long()
-        distribution = self.network(states)
-        predicted_distribution = distribution.gather(
-            1, actions.expand(-1, -1, self.num_atoms)
-        ).squeeze(1)
-        log_pred = torch.log(predicted_distribution.clamp(min=1e-5, max=1 - 1e-5))
         target_pmfs = self.get_pmfs_target(next_states, rewards, terminations)
-        loss_per_sample = -(target_pmfs * log_pred).sum(dim=1)
-        new_priorities = loss_per_sample.detach().cpu().numpy()
+        logits = self.network(states)
+        log_probs = F.log_softmax(logits, dim=2)
+        actions = actions.view(-1, 1, 1)
+        actions = actions.expand(-1, -1, self.num_atoms)
+        actions = actions.long()
+        current_log_probs = log_probs.gather(1, actions).squeeze(1)
+        loss_per_sample = -(target_pmfs * current_log_probs).sum(dim=1)
+        new_priorities = loss_per_sample.detach().cpu().numpy() + 1e-6
         self.buffer.update_priorities(indices, new_priorities)
         return (loss_per_sample * weights.squeeze()).mean()
 
@@ -234,31 +234,16 @@ class Agent:
     @torch.no_grad()
     def get_pmfs_target(self, next_states, rewards, terminations):
         batch_size = next_states.size(0)
-
-        # 1. Double DQN: Select best action using Online Net, get distribution from Target Net
         next_q_online = (self.network(next_states) * self.network.support).sum(dim=2)
         best_actions = next_q_online.argmax(dim=1)
-
-        # Select the distribution corresponding to the best action
-        # Shape: (batch_size, num_atoms)
         next_dist = self.target(next_states)[range(batch_size), best_actions]
-
-        # 2. Calculate the projected support (Bellman update)
-        # T_z = r + gamma * z
-        # We reshape rewards/terminations to (B, 1) to broadcast correctly against support (N,)
         projected_atoms = rewards.view(-1, 1) + (
             self.gamma**self.steps
         ) * self.network.support.view(1, -1) * (~terminations.view(-1, 1))
         projected_atoms = projected_atoms.clamp(self.vmin, self.vmax)
-
-        # 3. Project onto the fixed support grid (The complex math part)
-        # Map range [vmin, vmax] to indices [0, num_atoms - 1]
         b = (projected_atoms - self.vmin) / self.delta_z
         lower_idx = b.floor().long().clamp(0, self.num_atoms - 1)
         upper_idx = b.ceil().long().clamp(0, self.num_atoms - 1)
-
-        # Distribute probability mass to the neighbors
-        # (upper - b) goes to lower neighbor, (b - lower) goes to upper neighbor
 
         target_pmfs = torch.zeros_like(next_dist)
         target_pmfs.scatter_add_(1, lower_idx, next_dist * (upper_idx.float() - b))
