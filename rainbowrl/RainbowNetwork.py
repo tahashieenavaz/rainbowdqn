@@ -31,8 +31,16 @@ class RainbowNetwork(torch.nn.Module):
             NoisyLinear(embedding_dimension, num_atoms * action_dimension),
         )
 
+    def reset_noise(self):
+        for layer in self.value:
+            if isinstance(layer, NoisyLinear):
+                layer.reset_noise()
+        for layer in self.advantage:
+            if isinstance(layer, NoisyLinear):
+                layer.reset_noise()
+
     def forward(self, state):
-        features = self.phi(state)
+        features = self.phi(state / 255.0)
         value = self.value(features).view(-1, 1, self.num_atoms)
         advantage = self.advantage(features).view(
             -1, self.action_dimension, self.num_atoms
