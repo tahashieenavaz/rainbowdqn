@@ -8,7 +8,8 @@ class RainbowNetwork(torch.nn.Module):
         embedding_dimension: int,
         action_dimension: int,
         num_atoms: int,
-        activation_fn: torch.nn.Module,
+        stream_activation_function: torch.nn.Module,
+        convolution_activation_function: torch.nn.Module,
         vmin: float,
         vmax: float,
     ):
@@ -19,21 +20,21 @@ class RainbowNetwork(torch.nn.Module):
 
         self.phi = torch.nn.Sequential(
             torch.nn.Conv2d(4, 32, kernel_size=8, stride=4),
-            torch.nn.GELU(),
+            convolution_activation_function(),
             torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            torch.nn.GELU(),
+            convolution_activation_function(),
             torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            torch.nn.GELU(),
+            convolution_activation_function(),
             torch.nn.Flatten(),
         )
         self.value = torch.nn.Sequential(
             NoisyLinear(3136, embedding_dimension),
-            activation_fn(),
+            stream_activation_function(),
             NoisyLinear(embedding_dimension, num_atoms),
         )
         self.advantage = torch.nn.Sequential(
             NoisyLinear(3136, embedding_dimension),
-            activation_fn(),
+            stream_activation_function(),
             NoisyLinear(embedding_dimension, num_atoms * action_dimension),
         )
 

@@ -19,13 +19,14 @@ class Agent:
         training_starts: int = 80_000,
         training_frequency: int = 4,
         embedding_dimension: int = 512,
-        activation_fn=torch.nn.GELU,
+        stream_activation_function=torch.nn.GELU,
+        convolution_activation_function=torch.nn.GELU,
         num_atoms: int = 51,
         vmin: float = -10.0,
         vmax: float = 10.0,
         initial_beta: float = 0.4,
         timesteps: int = 10_000_000,
-        buffer_size: int = 100_000,
+        buffer_size: int = 500_000,
         batch_size: int = 32,
         image_size: int = 84,
         alpha: float = 0.5,
@@ -69,7 +70,8 @@ class Agent:
 
         self.network = RainbowNetwork(
             embedding_dimension=embedding_dimension,
-            activation_fn=activation_fn,
+            stream_activation_function=stream_activation_function,
+            convolution_activation_function=convolution_activation_function,
             num_atoms=num_atoms,
             action_dimension=self.action_dimension,
             vmax=vmax,
@@ -77,7 +79,8 @@ class Agent:
         ).to(self.device)
         self.target = RainbowNetwork(
             embedding_dimension=embedding_dimension,
-            activation_fn=activation_fn,
+            stream_activation_function=stream_activation_function,
+            convolution_activation_function=convolution_activation_function,
             num_atoms=num_atoms,
             action_dimension=self.action_dimension,
             vmax=vmax,
@@ -209,10 +212,7 @@ class Agent:
             states, actions, rewards, next_states, terminations, weights, indices
         )
         loss.backward()
-
-        # FIX 1: Gradient Clipping to prevent explosion
         torch.nn.utils.clip_grad_norm_(self.network.parameters(), 10.0)
-
         self.optimizer.step()
         self.update()
         return loss.item()
@@ -229,13 +229,9 @@ class Agent:
         actions = actions.long()
 
         current_log_probs = log_probs.gather(1, actions).squeeze(1)
-
-        # Loss Calculation
         loss_per_sample = -(target_pmfs * current_log_probs).sum(dim=1)
-
         new_priorities = loss_per_sample.detach().cpu().numpy() + 1e-6
         self.buffer.update_priorities(indices, new_priorities)
-
         return (loss_per_sample * weights.view(-1)).mean()
 
     def tick(self):
@@ -253,18 +249,15 @@ class Agent:
 
         batch_size = next_states.size(0)
 
-        # Online selection
         online_logits = self.network(next_states)
         online_probs = torch.softmax(online_logits, dim=2)
         next_q_online = (online_probs * self.network.support).sum(dim=2)
         best_actions = next_q_online.argmax(dim=1)
 
-        # Target evaluation
         target_logits = self.target(next_states)
         target_probs = torch.softmax(target_logits, dim=2)
         next_dist = target_probs[range(batch_size), best_actions]
 
-        # Projection
         projected_atoms = (
             rewards
             + (self.gamma**self.steps)
@@ -273,22 +266,16 @@ class Agent:
         )
         projected_atoms = projected_atoms.clamp(self.vmin, self.vmax)
         b = (projected_atoms - self.vmin) / self.delta_z
-
-        # FIX 2: Explicit Clamp to prevent floating point errors (e.g. -0.00001)
         b = b.clamp(0, self.num_atoms - 1)
 
         lower_idx = b.floor().long().clamp(0, self.num_atoms - 1)
         upper_idx = lower_idx + 1
-
         upper_weight = b - lower_idx.float()
         lower_weight = 1.0 - upper_weight
-
         upper_idx = upper_idx.clamp(0, self.num_atoms - 1)
-
         target_pmfs = torch.zeros_like(next_dist)
         target_pmfs.scatter_add_(1, lower_idx, next_dist * lower_weight)
         target_pmfs.scatter_add_(1, upper_idx, next_dist * upper_weight)
-
         return target_pmfs
 
     def update(self):
