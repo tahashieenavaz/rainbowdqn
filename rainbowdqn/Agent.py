@@ -27,7 +27,7 @@ class Agent:
     vmax: float = 10.0
     initial_beta: float = 0.4
     timesteps: int = 10_000_000
-    buffer_size: int = 500_000
+    buffer_size: int = 1_000_000
     batch_size: int = 32
     image_size: int = 84
     alpha: float = 0.5
