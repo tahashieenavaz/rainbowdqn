@@ -15,7 +15,6 @@ LossValue = NewType("LossValue", float)
 
 @dataclass
 class Agent:
-    environment: str
     lr: float = 0.0000625
     training_starts: int = 80_000
     training_frequency: int = 4
@@ -42,10 +41,8 @@ class Agent:
     record_every: int = 50
     swap_frequency: int = 2000
 
-    def __init__(
-        self,
-    ):
-        self.environment_identifier = self.environment
+    def __init__(self, environment: str):
+        self.environment_identifier = environment
         self.environment = make_environment(
             self.environment_identifier,
             record=self.record,
